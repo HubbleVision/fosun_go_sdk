@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"hubble_fosun_sdk/crypto"
+	"github.com/HubbleVision/fosun_go_sdk/crypto"
 
 	"github.com/google/uuid"
 )

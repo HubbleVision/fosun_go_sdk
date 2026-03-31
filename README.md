@@ -33,7 +33,7 @@ fosun_go_sdk/
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-repo/fosun_go_sdk.git
+git clone https://github.com/HubbleVision/fosun_go_sdk.git
 cd fosun_go_sdk
 
 # 下载依赖

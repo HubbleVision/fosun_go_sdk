@@ -1,4 +1,4 @@
-module hubble_fosun_sdk
+module github.com/HubbleVision/fosun_go_sdk
 
 go 1.25.8
 
