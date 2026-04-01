@@ -270,17 +270,21 @@ func (c *OpenAPIClient) Post(path string, data interface{}) (map[string]interfac
 	return c.Request("POST", path, data, nil)
 }
 
-// QueryKline 查询 K线数据
+// QueryKline 查询 K线数据（默认上海市场）
 // market: "sh"(上海)/"sz"(深圳)/"hk"(港股)/"us"(美股)
-// ktype: "1min"/"5min"/"15min"/"30min"/"60min"/"day"/"week"/"month"
+// ktype: "min1"/"min5"/"min15"/"min30"/"min60"/"day"/"week"/"month"
 // right: "NOR"(不复权)/"FQ"(前复权)/"DR"(后复权)
-func (c *OpenAPIClient) QueryKline(code, ktype string, num int, startTime, endTime int64) (map[string]interface{}, error) {
-	return c.queryKlineWithMarket("sh", code, ktype, num, startTime, endTime)
+func (c *OpenAPIClient) QueryKline(code, ktype string, num int, startTime, endTime int64) ([]KLine, error) {
+	return c.QueryKlineByMarket("sh", code, ktype, num, startTime, endTime)
 }
 
-// QueryKlineByMarket 按市场查询K线
-func (c *OpenAPIClient) QueryKlineByMarket(market, code, ktype string, num int, startTime, endTime int64) (map[string]interface{}, error) {
-	return c.queryKlineWithMarket(market, code, ktype, num, startTime, endTime)
+// QueryKlineByMarket 按市场查询K线，返回解析后的K线数据
+func (c *OpenAPIClient) QueryKlineByMarket(market, code, ktype string, num int, startTime, endTime int64) ([]KLine, error) {
+	resp, err := c.queryKlineWithMarket(market, code, ktype, num, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	return NewKLineWithMarket(resp, market, ktype)
 }
 
 func (c *OpenAPIClient) queryKlineWithMarket(market, code, ktype string, num int, startTime, endTime int64) (map[string]interface{}, error) {
