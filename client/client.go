@@ -287,7 +287,32 @@ func (c *OpenAPIClient) QueryKlineByMarket(market, code, ktype string, num int, 
 	return NewKLineWithMarket(resp, market, ktype)
 }
 
+// KlineQueryOptions K线查询选项
+type KlineQueryOptions struct {
+	Num       int    // 获取条数
+	StartTime int64  // 开始时间戳
+	EndTime   int64  // 结束时间戳
+	Right     string // 复权类型: "NOR"(不复权)/"FQ"(前复权)/"backward"(后复权)
+}
+
+// QueryKlineByMarketWithOptions 按市场查询K线，支持更多选项（包括复权类型）
+func (c *OpenAPIClient) QueryKlineByMarketWithOptions(market, code, ktype string, opts KlineQueryOptions) ([]KLine, error) {
+	right := opts.Right
+	if right == "" {
+		right = "backward" // 默认后复权
+	}
+	resp, err := c.queryKlineWithMarketWithOptions(market, code, ktype, opts.Num, opts.StartTime, opts.EndTime, right)
+	if err != nil {
+		return nil, err
+	}
+	return NewKLineWithMarket(resp, market, ktype)
+}
+
 func (c *OpenAPIClient) queryKlineWithMarket(market, code, ktype string, num int, startTime, endTime int64) (map[string]interface{}, error) {
+	return c.queryKlineWithMarketWithOptions(market, code, ktype, num, startTime, endTime, "backward")
+}
+
+func (c *OpenAPIClient) queryKlineWithMarketWithOptions(market, code, ktype string, num int, startTime, endTime int64, right string) (map[string]interface{}, error) {
 	fullCode := code
 	if market == "sh" {
 		fullCode = "sh" + code
@@ -306,7 +331,7 @@ func (c *OpenAPIClient) queryKlineWithMarket(market, code, ktype string, num int
 		"startTime":  startTime,
 		"endTime":    endTime,
 		"delay":      true,
-		"right":      "DR",
+		"right":      right,
 		"suspension": 0,
 		"time":       0,
 	}
