@@ -9,7 +9,8 @@
       "Bash(rm:*)",
       "Bash(FOSUN_BASE_URL=\"https://openapi-uat.fosunxcz.com\" FOSUN_API_KEY=\"ak_5Zb2Ln7nKXQTGEzRUMnce2F8RxtwOonFyqRP2-OSbb0=\" go run:*)",
       "Bash(ls:*)",
-      "Bash($env:FOSUN_BASE_URL=\"https://openapi-uat.fosunxcz.com\":*)"
+      "Bash($env:FOSUN_BASE_URL=\"https://openapi-uat.fosunxcz.com\":*)",
+      "Bash(FOSUN_BASE_URL=https://openapi-uat.fosunxcz.com FOSUN_API_KEY=ak_5Zb2Ln7nKXQTGEzRUMnce2F8RxtwOonFyqRP2-OSbb0= FSOPENAPI_CLIENT_PRIVATE_KEY=MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDC4nYByGg0DH4z9lKihAxIpEkFtV8Q56QwZrQf8997TQi7EDFmhwdXVNeaX0P4N5YqhZANiAAT8xYztSVmUAOZAosJ3xRFQCqPqxlvbIL07rlDrnHXQVs5Q3LFOz+QVegs8vU714vF7O4n4p+EzM5Oy/l+0TsV+U/ERIFK13Yg2jBt2KgZiBTlKBS14e0uMafG1Vyf5qjw= FSOPENAPI_SERVER_PUBLIC_KEY=MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEzfzUimjkvLw4lChJ1xt5q2SrPv5EXSgZCduze1cIa9/r547kCmFDBqYF8NIPvINV9VWt3yPY8jn4CFzDhbML/Tu0GCOeE3c83kVZDs1cUcK7dk3z+5nVHocAIIv5YPEr go test:*)"
     ]
   }
 }

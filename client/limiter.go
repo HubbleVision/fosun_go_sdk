@@ -1,9 +1,8 @@
 package client
 
 import (
-	"context"
-
-	"golang.org/x/time/rate"
+	"sync"
+	"time"
 )
 
 // RateLimiter 限速器接口
@@ -13,7 +12,11 @@ type RateLimiter interface {
 
 // tokenBucketLimiter 令牌桶限速器实现
 type tokenBucketLimiter struct {
-	limiter *rate.Limiter
+	mu         sync.Mutex
+	tokens     int
+	maxTokens  int
+	refillRate int
+	lastRefill time.Time
 }
 
 // NewRateLimiter 创建限速器
@@ -27,17 +30,61 @@ func NewRateLimiter(requestsPerSecond, burst int) RateLimiter {
 		burst = requestsPerSecond
 	}
 	return &tokenBucketLimiter{
-		limiter: rate.NewLimiter(rate.Limit(requestsPerSecond), burst),
+		tokens:     burst,
+		maxTokens:  burst,
+		refillRate: requestsPerSecond,
+		lastRefill: time.Now(),
 	}
 }
 
 // Wait 等待直到可以发送请求
 func (l *tokenBucketLimiter) Wait() error {
-	return l.limiter.Wait(context.Background())
+	for {
+		if l.tryConsume() {
+			return nil
+		}
+		time.Sleep(time.Millisecond * 10) // 短暂等待后重试
+	}
+}
+
+// tryConsume 尝试消费一个令牌
+func (l *tokenBucketLimiter) tryConsume() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.refill()
+
+	if l.tokens > 0 {
+		l.tokens--
+		return true
+	}
+	return false
+}
+
+// refill 补充令牌
+func (l *tokenBucketLimiter) refill() {
+	now := time.Now()
+	elapsed := now.Sub(l.lastRefill)
+	tokensToAdd := int(elapsed.Seconds() * float64(l.refillRate))
+
+	if tokensToAdd > 0 {
+		l.tokens = min(l.maxTokens, l.tokens+tokensToAdd)
+		l.lastRefill = now
+	}
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // noopLimiter 不限速实现
 type noopLimiter struct{}
 
 // Wait 立即返回，不限速
-func (l *noopLimiter) Wait() error { return nil }
+func (l *noopLimiter) Wait() error {
+	return nil
+}
