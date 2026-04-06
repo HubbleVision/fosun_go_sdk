@@ -8,7 +8,8 @@
       "Bash(go:*)",
       "Bash(rm:*)",
       "Bash(FOSUN_BASE_URL=\"https://openapi-uat.fosunxcz.com\" FOSUN_API_KEY=\"ak_5Zb2Ln7nKXQTGEzRUMnce2F8RxtwOonFyqRP2-OSbb0=\" go run:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash($env:FOSUN_BASE_URL=\"https://openapi-uat.fosunxcz.com\":*)"
     ]
   }
 }

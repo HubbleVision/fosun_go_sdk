@@ -29,17 +29,20 @@ type OpenAPIClient struct {
 	BasePath    string
 	APIPrefix   string
 	MaxRetries  int
+	limiter     RateLimiter
 }
 
 // Config 客户端配置
 type Config struct {
-	BaseURL          string
-	APIKey           string
-	ClientPrivateKey string
-	ServerPublicKey  string
-	SDKType          string
-	RequestTimeout   int
-	MaxRetries       int
+	BaseURL           string
+	APIKey            string
+	ClientPrivateKey  string
+	ServerPublicKey   string
+	SDKType           string
+	RequestTimeout    int
+	MaxRetries        int
+	RateLimitRequests int // 每秒允许请求数 (RPS), 0 表示不限速
+	RateLimitBurst    int // 突发请求数 (桶容量), 默认为 RateLimitRequests
 }
 
 // NewFromConfig 使用配置创建客户端
@@ -75,6 +78,9 @@ func NewFromConfig(cfg Config) (*OpenAPIClient, error) {
 		os.Setenv("SDK_TYPE", cfg.SDKType)
 	}
 
+	// 初始化限速器
+	limiter := NewRateLimiter(cfg.RateLimitRequests, cfg.RateLimitBurst)
+
 	return &OpenAPIClient{
 		BaseURL:     baseURL,
 		APIKey:      cfg.APIKey,
@@ -84,6 +90,7 @@ func NewFromConfig(cfg Config) (*OpenAPIClient, error) {
 		BasePath:    strings.TrimRight(parsedURL.Path, "/"),
 		APIPrefix:   authManager.APIPrefix,
 		MaxRetries:  cfg.MaxRetries,
+		limiter:     limiter,
 	}, nil
 }
 
@@ -101,6 +108,11 @@ func NewOpenAPIClient(baseURL, apiKey string) (*OpenAPIClient, error) {
 func (c *OpenAPIClient) Request(method, path string, data interface{}, params map[string]string) (map[string]interface{}, error) {
 	if path == "" {
 		return nil, errors.New("path is required")
+	}
+
+	// 在发送请求前限速
+	if err := c.limiter.Wait(); err != nil {
+		return nil, fmt.Errorf("rate limit wait error: %v", err)
 	}
 
 	if !strings.HasPrefix(path, "/") {
@@ -273,7 +285,7 @@ func (c *OpenAPIClient) Post(path string, data interface{}) (map[string]interfac
 // QueryKline 查询 K线数据（默认上海市场）
 // market: "sh"(上海)/"sz"(深圳)/"hk"(港股)/"us"(美股)
 // ktype: "min1"/"min5"/"min15"/"min30"/"min60"/"day"/"week"/"month"
-// right: "NOR"(不复权)/"FQ"(前复权)/"DR"(后复权)
+// right: noward 不复权， forward 前复权， backward 后复权
 func (c *OpenAPIClient) QueryKline(code, ktype string, num int, startTime, endTime int64) ([]KLine, error) {
 	return c.QueryKlineByMarket("sh", code, ktype, num, startTime, endTime)
 }
@@ -292,14 +304,14 @@ type KlineQueryOptions struct {
 	Num       int    // 获取条数
 	StartTime int64  // 开始时间戳
 	EndTime   int64  // 结束时间戳
-	Right     string // 复权类型: "NOR"(不复权)/"FQ"(前复权)/"backward"(后复权)
+	Right     string // 复权类型: noward 不复权， forward 前复权， backward 后复权
 }
 
 // QueryKlineByMarketWithOptions 按市场查询K线，支持更多选项（包括复权类型）
 func (c *OpenAPIClient) QueryKlineByMarketWithOptions(market, code, ktype string, opts KlineQueryOptions) ([]KLine, error) {
 	right := opts.Right
 	if right == "" {
-		right = "backward" // 默认后复权
+		right = "forward" // 默认前复权
 	}
 	resp, err := c.queryKlineWithMarketWithOptions(market, code, ktype, opts.Num, opts.StartTime, opts.EndTime, right)
 	if err != nil {
@@ -309,7 +321,7 @@ func (c *OpenAPIClient) QueryKlineByMarketWithOptions(market, code, ktype string
 }
 
 func (c *OpenAPIClient) queryKlineWithMarket(market, code, ktype string, num int, startTime, endTime int64) (map[string]interface{}, error) {
-	return c.queryKlineWithMarketWithOptions(market, code, ktype, num, startTime, endTime, "backward")
+	return c.queryKlineWithMarketWithOptions(market, code, ktype, num, startTime, endTime, "forward")
 }
 
 func (c *OpenAPIClient) queryKlineWithMarketWithOptions(market, code, ktype string, num int, startTime, endTime int64, right string) (map[string]interface{}, error) {
