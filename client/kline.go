@@ -81,7 +81,7 @@ func ConvertPrice(price float64, market string) float64 {
 		return price / 1000 // 港分 -> 港币
 	case "us":
 		return price / 10000 // 美分 -> 美元
-	case "sh", "sz":
+	case "sh", "sz", "bj":
 		return price / 100 // 分 -> 元
 	default:
 		return price
@@ -150,6 +150,15 @@ func NewKLineWithMarket(resp map[string]interface{}, market, ktype string) ([]KL
 	}
 
 	return klines, nil
+}
+
+// pow10 计算 10^n
+func pow10(n int) float64 {
+	result := 1.0
+	for i := 0; i < n; i++ {
+		result *= 10
+	}
+	return result
 }
 
 func getFloat64(v interface{}) float64 {

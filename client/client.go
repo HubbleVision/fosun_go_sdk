@@ -98,7 +98,7 @@ func NewOpenAPIClient(baseURL, apiKey string) (*OpenAPIClient, error) {
 }
 
 // Request 发送带加密和签名的请求
-func (c *OpenAPIClient) Request(method, path string, data interface{}, params map[string]string) (map[string]interface{}, error) {
+func (c *OpenAPIClient) requestInternal(method, path string, data interface{}, params map[string]string, allowRetry bool) (map[string]interface{}, error) {
 	if path == "" {
 		return nil, errors.New("path is required")
 	}
@@ -178,6 +178,10 @@ func (c *OpenAPIClient) Request(method, path string, data interface{}, params ma
 		signingKey, method, fullSignPath, queryStr, timestamp, nonce, finalBodyBytes,
 	)
 
+	if queryStr != "" {
+		reqURL = fmt.Sprintf("%s?%s", reqURL, queryStr)
+	}
+
 	req, err := http.NewRequest(strings.ToUpper(method), reqURL, bytes.NewBuffer(finalBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
@@ -215,6 +219,12 @@ func (c *OpenAPIClient) Request(method, path string, data interface{}, params ma
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Session 过期时自动续期重试一次
+		if allowRetry && resp.StatusCode == 401 && bytes.Contains(bodyBytes, []byte("Session expired")) {
+			resp.Body.Close()
+			c.AuthManager.InvalidateSession()
+			return c.requestInternal(method, path, data, params, false)
+		}
 		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -263,6 +273,11 @@ func (c *OpenAPIClient) Request(method, path string, data interface{}, params ma
 	}
 
 	return dataMap, nil
+}
+
+// Request 发送带加密和签名的请求，Session 过期时自动续期重试
+func (c *OpenAPIClient) Request(method, path string, data interface{}, params map[string]string) (map[string]interface{}, error) {
+	return c.requestInternal(method, path, data, params, true)
 }
 
 // Post 发送 POST 请求
