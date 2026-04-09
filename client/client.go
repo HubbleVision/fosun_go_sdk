@@ -98,7 +98,7 @@ func NewOpenAPIClient(baseURL, apiKey string) (*OpenAPIClient, error) {
 }
 
 // Request 发送带加密和签名的请求
-func (c *OpenAPIClient) Request(method, path string, data interface{}, params map[string]string) (map[string]interface{}, error) {
+func (c *OpenAPIClient) requestInternal(method, path string, data interface{}, params map[string]string, allowRetry bool) (map[string]interface{}, error) {
 	if path == "" {
 		return nil, errors.New("path is required")
 	}
@@ -108,6 +108,15 @@ func (c *OpenAPIClient) Request(method, path string, data interface{}, params ma
 	}
 	requestPath := fmt.Sprintf("%s%s", c.APIPrefix, path)
 	reqURL := fmt.Sprintf("%s%s", c.BaseURL, requestPath)
+
+	sessionID, signingKey, encryptionKey, err := c.AuthManager.GetValidSession()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get valid session: %v", err)
+	}
+
+	timestamp := fmt.Sprintf("%d", time.Now().UnixNano()/int64(time.Millisecond))
+	requestID := uuid.New().String()
+	nonce := strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	queryStr := ""
 	if len(params) > 0 {
@@ -129,163 +138,146 @@ func (c *OpenAPIClient) Request(method, path string, data interface{}, params ma
 	isMarketPath := strings.Contains(requestPath, "/market/") || strings.Contains(requestPath, "/optmarket/")
 	isEncrypted := data != nil && !isMarketPath
 
-	// buildAndSend 使用指定的 session 构建、发送请求并处理响应
-	buildAndSend := func(sessionID string, signingKey, encryptionKey []byte) (map[string]interface{}, int, error) {
-		timestamp := fmt.Sprintf("%d", time.Now().UnixNano()/int64(time.Millisecond))
-		requestID := uuid.New().String()
-		nonce := strings.ReplaceAll(uuid.New().String(), "-", "")
+	reqPayload := map[string]interface{}{
+		"encrypted": false,
+		"content":   data,
+	}
+	if data == nil {
+		reqPayload["content"] = map[string]interface{}{}
+	}
 
-		reqPayload := map[string]interface{}{
-			"encrypted": false,
-			"content":   data,
-		}
-		if data == nil {
-			reqPayload["content"] = map[string]interface{}{}
+	if isEncrypted {
+		plaintextBytes, err := json.Marshal(data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal data: %v", err)
 		}
 
-		if isEncrypted {
-			plaintextBytes, err := json.Marshal(data)
-			if err != nil {
-				return nil, 0, fmt.Errorf("failed to marshal data: %v", err)
-			}
+		aadStr := crypto.BuildResponseAAD(sessionID, timestamp, nonce)
+
+		ivB64, ciphertextB64, tagB64, err := crypto.EncryptBody(
+			encryptionKey, plaintextBytes, []byte(aadStr),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt body: %v", err)
+		}
+
+		reqPayload = map[string]interface{}{
+			"encrypted": true,
+			"iv":        ivB64,
+			"tag":       tagB64,
+			"content":   ciphertextB64,
+		}
+	}
+
+	finalBodyBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %v", err)
+	}
+
+	signature := crypto.Sign(
+		signingKey, method, fullSignPath, queryStr, timestamp, nonce, finalBodyBytes,
+	)
+
+	if queryStr != "" {
+		reqURL = fmt.Sprintf("%s?%s", reqURL, queryStr)
+	}
+
+	req, err := http.NewRequest(strings.ToUpper(method), reqURL, bytes.NewBuffer(finalBodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", c.APIKey)
+	req.Header.Set("X-session", sessionID)
+	req.Header.Set("X-Request-Id", requestID)
+	req.Header.Set("X-Timestamp", timestamp)
+	req.Header.Set("X-Nonce", nonce)
+	req.Header.Set("X-Signature", signature)
+
+	// 添加重试机制
+	var resp *http.Response
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		resp, err = c.HTTPClient.Do(req)
+		if err == nil {
+			break
+		}
+		if i < maxRetries-1 {
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("request failed after retries: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Session 过期时自动续期重试一次
+		if allowRetry && resp.StatusCode == 401 && bytes.Contains(bodyBytes, []byte("Session expired")) {
+			resp.Body.Close()
+			c.AuthManager.InvalidateSession()
+			return c.requestInternal(method, path, data, params, false)
+		}
+		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var respPayload map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &respPayload); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %v", err)
+	}
+
+	var respData interface{}
+	if _, ok := respPayload["encrypted"]; !ok {
+		respData = respPayload
+	} else {
+		isRespEncrypted, _ := respPayload["encrypted"].(bool)
+		contentObj := respPayload["content"]
+
+		if isRespEncrypted {
+			ivB64, _ := respPayload["iv"].(string)
+			tagB64, _ := respPayload["tag"].(string)
+			ciphertextB64, _ := contentObj.(string)
 
 			aadStr := crypto.BuildResponseAAD(sessionID, timestamp, nonce)
 
-			ivB64, ciphertextB64, tagB64, err := crypto.EncryptBody(
-				encryptionKey, plaintextBytes, []byte(aadStr),
+			decryptedBytes, err := crypto.DecryptBody(
+				encryptionKey, ivB64, ciphertextB64, tagB64, []byte(aadStr),
 			)
 			if err != nil {
-				return nil, 0, fmt.Errorf("failed to encrypt body: %v", err)
+				return nil, fmt.Errorf("response decryption failed: %v", err)
 			}
 
-			reqPayload = map[string]interface{}{
-				"encrypted": true,
-				"iv":        ivB64,
-				"tag":       tagB64,
-				"content":   ciphertextB64,
+			if err := json.Unmarshal(decryptedBytes, &respData); err != nil {
+				return nil, fmt.Errorf("failed to parse decrypted JSON: %v", err)
 			}
-		}
-
-		finalBodyBytes, err := json.Marshal(reqPayload)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to marshal payload: %v", err)
-		}
-
-		signature := crypto.Sign(
-			signingKey, method, fullSignPath, queryStr, timestamp, nonce, finalBodyBytes,
-		)
-
-		req, err := http.NewRequest(strings.ToUpper(method), reqURL, bytes.NewBuffer(finalBodyBytes))
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to create request: %v", err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-API-Key", c.APIKey)
-		req.Header.Set("X-session", sessionID)
-		req.Header.Set("X-Request-Id", requestID)
-		req.Header.Set("X-Timestamp", timestamp)
-		req.Header.Set("X-Nonce", nonce)
-		req.Header.Set("X-Signature", signature)
-
-		// 添加重试机制
-		var resp *http.Response
-		maxRetries := 3
-		for i := 0; i < maxRetries; i++ {
-			resp, err = c.HTTPClient.Do(req)
-			if err == nil {
-				break
-			}
-			if i < maxRetries-1 {
-				time.Sleep(2 * time.Second)
-			}
-		}
-
-		if err != nil {
-			return nil, 0, fmt.Errorf("request failed after retries: %v", err)
-		}
-		defer resp.Body.Close()
-
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to read response body: %v", err)
-		}
-
-		// 401 Session expired — 返回状态码让外层处理重试
-		if resp.StatusCode == 401 {
-			return nil, 401, fmt.Errorf("session expired (status 401): %s", string(bodyBytes))
-		}
-
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, resp.StatusCode, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
-		}
-
-		var respPayload map[string]interface{}
-		if err := json.Unmarshal(bodyBytes, &respPayload); err != nil {
-			return nil, 0, fmt.Errorf("failed to unmarshal response: %v", err)
-		}
-
-		var respData interface{}
-		if _, ok := respPayload["encrypted"]; !ok {
-			respData = respPayload
 		} else {
-			isRespEncrypted, _ := respPayload["encrypted"].(bool)
-			contentObj := respPayload["content"]
-
-			if isRespEncrypted {
-				ivB64, _ := respPayload["iv"].(string)
-				tagB64, _ := respPayload["tag"].(string)
-				ciphertextB64, _ := contentObj.(string)
-
-				aadStr := crypto.BuildResponseAAD(sessionID, timestamp, nonce)
-
-				decryptedBytes, err := crypto.DecryptBody(
-					encryptionKey, ivB64, ciphertextB64, tagB64, []byte(aadStr),
-				)
-				if err != nil {
-					return nil, 0, fmt.Errorf("response decryption failed: %v", err)
-				}
-
-				if err := json.Unmarshal(decryptedBytes, &respData); err != nil {
-					return nil, 0, fmt.Errorf("failed to parse decrypted JSON: %v", err)
-				}
-			} else {
-				respData = contentObj
-			}
+			respData = contentObj
 		}
-
-		dataMap, ok := respData.(map[string]interface{})
-		if !ok {
-			return map[string]interface{}{"data": respData}, 0, nil
-		}
-
-		if code, ok := dataMap["code"].(float64); ok && code != 0 {
-			msg, _ := dataMap["message"].(string)
-			return nil, 0, fmt.Errorf("business error (code %v): %s", code, msg)
-		}
-
-		return dataMap, 0, nil
 	}
 
-	// 首次请求
-	sessionID, signingKey, encryptionKey, err := c.AuthManager.GetValidSession()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get valid session: %v", err)
+	dataMap, ok := respData.(map[string]interface{})
+	if !ok {
+		return map[string]interface{}{"data": respData}, nil
 	}
 
-	result, statusCode, err := buildAndSend(sessionID, signingKey, encryptionKey)
-	if err != nil && statusCode == 401 {
-		// Session expired: 清除旧 session，重新创建后重试一次
-		c.AuthManager.InvalidateSession()
-		newSessionID, newSigningKey, newEncryptionKey, retryErr := c.AuthManager.GetValidSession()
-		if retryErr != nil {
-			return nil, fmt.Errorf("session expired and retry failed to create new session: %v (original error: %v)", retryErr, err)
-		}
-		result, _, err = buildAndSend(newSessionID, newSigningKey, newEncryptionKey)
-		return result, err
+	if code, ok := dataMap["code"].(float64); ok && code != 0 {
+		msg, _ := dataMap["message"].(string)
+		return nil, fmt.Errorf("business error (code %v): %s", code, msg)
 	}
 
-	return result, err
+	return dataMap, nil
+}
+
+// Request 发送带加密和签名的请求，Session 过期时自动续期重试
+func (c *OpenAPIClient) Request(method, path string, data interface{}, params map[string]string) (map[string]interface{}, error) {
+	return c.requestInternal(method, path, data, params, true)
 }
 
 // Post 发送 POST 请求

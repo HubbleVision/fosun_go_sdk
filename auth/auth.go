@@ -234,3 +234,11 @@ func (sm *SessionManager) GetValidSession() (string, []byte, []byte, error) {
 	}
 	return sm.SessionID, sm.SigningKey, sm.EncryptionKey, nil
 }
+
+// InvalidateSession 使当前会话失效，强制下次请求重新创建
+func (sm *SessionManager) InvalidateSession() {
+	sm.SessionID = ""
+	sm.ExpiresAt = 0
+	sm.SigningKey = nil
+	sm.EncryptionKey = nil
+}
