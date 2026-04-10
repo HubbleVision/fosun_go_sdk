@@ -215,6 +215,14 @@ func (sm *SessionManager) CreateSession() error {
 	return nil
 }
 
+// InvalidateSession 清除当前会话状态，强制下次请求时重新创建
+func (sm *SessionManager) InvalidateSession() {
+	sm.SessionID = ""
+	sm.SigningKey = nil
+	sm.EncryptionKey = nil
+	sm.ExpiresAt = 0
+}
+
 // GetValidSession 获取有效会话，如果过期则重新创建
 func (sm *SessionManager) GetValidSession() (string, []byte, []byte, error) {
 	now := time.Now().Unix()
